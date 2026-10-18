@@ -130,3 +130,12 @@ app/
 - **M6+ 二期**：OCR、定时任务、蓝叠适配优化
 
 M0~M2 是地基，也是我接下来可以立刻开工的部分。
+
+---
+
+## 8. 补充（2026-10-18，第二轮用户反馈）
+
+- **GitHub 组织**：https://github.com/twst-toolbox （项目仓库将建在其下，如 `twst-toolbox/DailyQuest`）
+- **OCR 结论**：用户对 PaddleOCR/Tesseract 的实测结果差。决定：按钮/图标全部走模板匹配（艺术字 UI 反而匹配更稳），OCR 仅作为二期"先模板定位再读小区域数值"的辅助，引擎设计上把 `tap_text`/`read_number` 做成可选原语。
+- **首个测试任务确认**：扭曲仙境日服"上课清体力"（可无限重复，优于每日一次的签到），流程拆解见 `docs/GAMES/twisted-wonderland-jp.md`。截图证实课程内建 AUTO/LOOP，自动化成本低。
+- **截图+点击并发**：MediaProjection 取帧与无障碍手势互斥无冲突（FGA 同款架构已验证），无需担心。
