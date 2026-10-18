@@ -2,6 +2,7 @@ package com.dailyquest.app
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
@@ -25,6 +26,8 @@ import com.dailyquest.app.core.script.ScriptExecutor
 import com.dailyquest.app.core.vision.TemplateMatcher
 import com.dailyquest.app.data.TemplateStore
 import com.dailyquest.app.service.DailyQuestAccessibilityService
+import com.dailyquest.app.service.DailyQuestService
+import com.dailyquest.app.ui.TemplateRecorderScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -40,7 +43,13 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK && result.data != null) {
-            captureManager.start(result.resultCode, result.data!!)
+            // 启动前台服务并传递 MediaProjection
+            val serviceIntent = Intent(this, DailyQuestService::class.java).apply {
+                action = DailyQuestService.ACTION_START
+                putExtra(DailyQuestService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(DailyQuestService.EXTRA_RESULT_DATA, result.data)
+            }
+            startForegroundService(serviceIntent)
         }
     }
 
@@ -59,7 +68,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(
+                    AppNavigator(
                         gestureController = gestureController,
                         scriptExecutor = scriptExecutor,
                         templateStore = templateStore,
@@ -90,7 +99,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        captureManager.stop()
+        if (!DailyQuestService.isRunning()) {
+            captureManager.stop()
+        }
     }
 }
 
@@ -102,6 +113,61 @@ fun DailyQuestTheme(content: @Composable () -> Unit) {
     )
 }
 
+enum class Screen {
+    MAIN, RECORDER
+}
+
+@Composable
+fun AppNavigator(
+    gestureController: GestureController,
+    scriptExecutor: ScriptExecutor,
+    templateStore: TemplateStore,
+    onRequestAccessibility: () -> Unit,
+    onRequestMediaProjection: () -> Unit,
+    onRequestOverlay: () -> Unit
+) {
+    var currentScreen by remember { mutableStateOf(Screen.MAIN) }
+    var currentScreenshot by remember { mutableStateOf<Bitmap?>(null) }
+    var currentGameId by remember { mutableStateOf("twst-jp") }
+    val scope = rememberCoroutineScope()
+
+    when (currentScreen) {
+        Screen.MAIN -> MainScreen(
+            gestureController = gestureController,
+            scriptExecutor = scriptExecutor,
+            templateStore = templateStore,
+            onRequestAccessibility = onRequestAccessibility,
+            onRequestMediaProjection = onRequestMediaProjection,
+            onRequestOverlay = onRequestOverlay,
+            onStartRecording = { gameId ->
+                scope.launch {
+                    val bitmap = gestureController.captureScreen()
+                    if (bitmap != null) {
+                        currentScreenshot = bitmap
+                        currentGameId = gameId
+                        currentScreen = Screen.RECORDER
+                    }
+                }
+            }
+        )
+        Screen.RECORDER -> {
+            currentScreenshot?.let { screenshot ->
+                TemplateRecorderScreen(
+                    screenshot = screenshot,
+                    gameId = currentGameId,
+                    templateStore = templateStore,
+                    onSaveComplete = { fileName ->
+                        currentScreen = Screen.MAIN
+                    },
+                    onCancel = {
+                        currentScreen = Screen.MAIN
+                    }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun MainScreen(
     gestureController: GestureController,
@@ -109,7 +175,8 @@ fun MainScreen(
     templateStore: TemplateStore,
     onRequestAccessibility: () -> Unit,
     onRequestMediaProjection: () -> Unit,
-    onRequestOverlay: () -> Unit
+    onRequestOverlay: () -> Unit,
+    onStartRecording: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -120,15 +187,15 @@ fun MainScreen(
     var canDrawOverlay by remember { mutableStateOf(false) }
     var isRunning by remember { mutableStateOf(false) }
     var availableGames by remember { mutableStateOf(listOf<String>()) }
+    var showRecorderDialog by remember { mutableStateOf(false) }
 
-    // 定时刷新状态
     LaunchedEffect(Unit) {
         scriptExecutor.onLog = { msg ->
             logText = (logText + msg + "\n").takeLast(2000)
         }
         while (true) {
             isAccessibilityRunning = gestureController.isAccessibilityReady()
-            isCaptureRunning = gestureController.isCaptureReady()
+            isCaptureRunning = DailyQuestService.captureManager?.isRunning() ?: false
             canDrawOverlay = Settings.canDrawOverlays(context)
             isRunning = scriptExecutor.state == ScriptExecutor.State.RUNNING
             availableGames = templateStore.listGames()
@@ -152,7 +219,7 @@ fun MainScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "M2 脚本引擎测试版",
+            text = "M3 录制版",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -196,7 +263,7 @@ fun MainScreen(
 
                     if (!isCaptureRunning) {
                         Button(onClick = onRequestMediaProjection, modifier = Modifier.fillMaxWidth()) {
-                            Text("3. 授权屏幕录制")
+                            Text("3. 启动屏幕录制服务")
                         }
                     }
                 }
@@ -204,58 +271,43 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // 基础功能测试
+        // 模板录制
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("功能测试", style = MaterialTheme.typography.titleMedium)
+                Text("模板录制", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "先切换到游戏画面，再点下方按钮截屏",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
-                    onClick = {
-                        scope.launch {
-                            statusText = "截屏中..."
-                            val bitmap = gestureController.captureScreen()
-                            statusText = if (bitmap != null) {
-                                "截屏成功！尺寸: ${bitmap.width}x${bitmap.height}"
-                            } else "截屏失败"
-                        }
-                    },
+                    onClick = { showRecorderDialog = true },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = isCaptureRunning
-                ) { Text("测试截屏") }
+                ) {
+                    Text("录制新模板")
+                }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                val success = gestureController.tap(960f, 444f)
-                                statusText = if (success) "点击成功" else "点击失败"
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = isAccessibilityRunning
-                    ) { Text("测试点击") }
-
-                    Button(
-                        onClick = {
-                            gestureController.back()
-                            statusText = "已按返回键"
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = isAccessibilityRunning
-                    ) { Text("返回键") }
+                if (availableGames.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "已有模板：${availableGames.joinToString(", ")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 游戏脚本执行
+        // 游戏任务执行
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
@@ -266,19 +318,27 @@ fun MainScreen(
 
                 if (availableGames.isEmpty()) {
                     Text(
-                        "暂无游戏脚本\n（等待录入模板和配置脚本）",
+                        "暂无游戏脚本\n（请先录制模板）",
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
                 } else {
                     availableGames.forEach { gameId ->
+                        val templates = templateStore.listTemplates(gameId)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(gameId, modifier = Modifier.weight(1f))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(gameId)
+                                Text(
+                                    "${templates.size} 个模板",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Button(
                                 onClick = {
                                     scope.launch {
@@ -289,6 +349,9 @@ fun MainScreen(
                                 },
                                 enabled = !isRunning && isAccessibilityRunning && isCaptureRunning
                             ) { Text("执行") }
+                        }
+                        if (gameId != availableGames.last()) {
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
@@ -328,6 +391,46 @@ fun MainScreen(
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+
+    // 录制对话框
+    if (showRecorderDialog) {
+        AlertDialog(
+            onDismissRequest = { showRecorderDialog = false },
+            title = { Text("选择游戏") },
+            text = {
+                Column {
+                    Text("为哪个游戏录制模板？")
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = "twst-jp",
+                        onValueChange = {},
+                        label = { Text("游戏 ID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "提示：\n• 扭曲仙境日服：twst-jp\n• 扭曲仙境美服：twst-en\n• FGO 日服：fgo-jp",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRecorderDialog = false
+                    onStartRecording("twst-jp")
+                }) {
+                    Text("开始录制")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRecorderDialog = false }) {
+                    Text("取消")
+                }
+            }
         )
     }
 }

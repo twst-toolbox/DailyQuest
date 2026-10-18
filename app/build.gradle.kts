@@ -1,3 +1,6 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -24,6 +27,19 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+        }
+    }
+
+    // 自定义 APK 输出文件名：DailyQuest-0.2.0-debug-b12-20261019.apk
+    applicationVariants.all {
+        val variant = this
+        variant.outputs.all {
+            val buildType = variant.buildType.name
+            val versionName = variant.versionName
+            val versionCode = variant.versionCode
+            val date = SimpleDateFormat("yyyyMMdd-HHmm").format(Date())
+            (this as com.android.build.gradle.internal.api.ApkVariantOutputImpl).outputFileName =
+                "DailyQuest-${versionName}-b${versionCode}-${date}.apk"
         }
     }
 
