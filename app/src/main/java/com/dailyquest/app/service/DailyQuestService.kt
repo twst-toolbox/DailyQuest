@@ -48,7 +48,6 @@ class DailyQuestService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var overlayView: ComposeView? = null
-    private var isForegroundStarted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -58,53 +57,32 @@ class DailyQuestService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        try {
-            when (intent?.action) {
-                ACTION_START -> {
-                    // 先启动前台服务（必须在 5 秒内调用）
-                    if (!isForegroundStarted) {
-                        startForeground(NOTIFICATION_ID, createNotification("启动中..."))
-                        isForegroundStarted = true
-                    }
+        when (intent?.action) {
+            ACTION_START -> {
+                // 立即启动前台服务
+                startForeground(NOTIFICATION_ID, createNotification("运行中"))
 
-                    // 然后启动 MediaProjection
-                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                    val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(EXTRA_RESULT_DATA)
-                    }
-                    if (resultCode != -1 && resultData != null) {
-                        startMediaProjection(resultCode, resultData)
-                    }
+                // 启动 MediaProjection
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+                val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                }
+                if (resultCode != -1 && resultData != null) {
+                    captureManager = ScreenCaptureManager(this)
+                    captureManager?.start(resultCode, resultData)
+                }
 
-                    // 最后显示悬浮窗
-                    showOverlay()
-                    updateNotification("运行中")
-                }
-                ACTION_STOP -> {
-                    stopSelf()
-                }
+                // 显示悬浮窗
+                showOverlay()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // 即使出错也要保持前台服务，避免崩溃
-            if (!isForegroundStarted) {
-                startForeground(NOTIFICATION_ID, createNotification("错误: ${e.message}"))
-                isForegroundStarted = true
+            ACTION_STOP -> {
+                stopSelf()
             }
         }
         return START_STICKY
-    }
-
-    private fun startMediaProjection(resultCode: Int, data: Intent) {
-        try {
-            captureManager = ScreenCaptureManager(this)
-            captureManager?.start(resultCode, data)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 
     private fun showOverlay() {
@@ -131,9 +109,23 @@ class DailyQuestService : Service() {
             overlayView = ComposeView(this).apply {
                 setContent {
                     MaterialTheme {
-                        OverlayControlPanel(
-                            onClose = { stopSelf() }
-                        )
+                        Card(
+                            modifier = Modifier.padding(8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text("DQ", style = MaterialTheme.typography.titleSmall)
+                                TextButton(onClick = { stopSelf() }) {
+                                    Text("停止", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -150,10 +142,7 @@ class DailyQuestService : Service() {
                 CHANNEL_ID,
                 "DailyQuest 服务",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "保持脚本引擎运行"
-                setShowBadge(false)
-            }
+            )
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
@@ -175,62 +164,18 @@ class DailyQuestService : Service() {
             .build()
     }
 
-    fun updateNotification(status: String) {
-        try {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.notify(NOTIFICATION_ID, createNotification(status))
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            captureManager?.stop()
-            captureManager = null
-            overlayView?.let {
+        captureManager?.stop()
+        captureManager = null
+        overlayView?.let {
+            try {
                 windowManager.removeView(it)
-            }
-            overlayView = null
-        } catch (e: Exception) {
-            e.printStackTrace()
+            } catch (e: Exception) {}
         }
+        overlayView = null
         instance = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-}
-
-@Composable
-fun OverlayControlPanel(onClose: () -> Unit) {
-    var isExpanded by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.padding(8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text("DQ", style = MaterialTheme.typography.titleSmall)
-                TextButton(onClick = { isExpanded = !isExpanded }) {
-                    Text(if (isExpanded) "收起" else "展开")
-                }
-            }
-
-            if (isExpanded) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("服务运行中", style = MaterialTheme.typography.bodySmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                TextButton(onClick = onClose) {
-                    Text("停止服务", color = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-    }
 }

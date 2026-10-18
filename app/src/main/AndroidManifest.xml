@@ -6,7 +6,6 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 前台服务 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- 通知 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 保持唤醒 -->
@@ -47,8 +46,7 @@
         <!-- 前台服务：保持 MediaProjection 会话 -->
         <service
             android:name=".service.DailyQuestService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:exported="false" />
 
     </application>
 </manifest>
