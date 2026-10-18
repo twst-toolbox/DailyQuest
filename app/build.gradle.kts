@@ -15,8 +15,8 @@ android {
         applicationId = "com.dailyquest.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.1"
     }
 
     buildTypes {
@@ -30,7 +30,7 @@ android {
         }
     }
 
-    // 自定义 APK 输出文件名：DailyQuest-0.2.0-debug-b12-20261019.apk
+    // 自定义 APK 输出文件名
     applicationVariants.all {
         val variant = this
         variant.outputs.all {

@@ -48,6 +48,7 @@ class DailyQuestService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var overlayView: ComposeView? = null
+    private var isForegroundStarted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -57,65 +58,86 @@ class DailyQuestService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
+        try {
+            when (intent?.action) {
+                ACTION_START -> {
+                    // 先启动前台服务（必须在 5 秒内调用）
+                    if (!isForegroundStarted) {
+                        startForeground(NOTIFICATION_ID, createNotification("启动中..."))
+                        isForegroundStarted = true
+                    }
+
+                    // 然后启动 MediaProjection
+                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+                    val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                    }
+                    if (resultCode != -1 && resultData != null) {
+                        startMediaProjection(resultCode, resultData)
+                    }
+
+                    // 最后显示悬浮窗
+                    showOverlay()
+                    updateNotification("运行中")
                 }
-                if (resultCode != -1 && resultData != null) {
-                    startMediaProjection(resultCode, resultData)
+                ACTION_STOP -> {
+                    stopSelf()
                 }
-                startForeground(NOTIFICATION_ID, createNotification("待机中"))
-                showOverlay()
             }
-            ACTION_STOP -> {
-                stopSelf()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // 即使出错也要保持前台服务，避免崩溃
+            if (!isForegroundStarted) {
+                startForeground(NOTIFICATION_ID, createNotification("错误: ${e.message}"))
+                isForegroundStarted = true
             }
         }
         return START_STICKY
     }
 
     private fun startMediaProjection(resultCode: Int, data: Intent) {
-        captureManager = ScreenCaptureManager(this)
-        captureManager?.start(resultCode, data)
-        updateNotification("屏幕录制已启动")
+        try {
+            captureManager = ScreenCaptureManager(this)
+            captureManager?.start(resultCode, data)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun showOverlay() {
         if (overlayView != null) return
         if (!android.provider.Settings.canDrawOverlays(this)) return
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = 16
-            y = 100
-        }
+        try {
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else
+                    @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.END
+                x = 16
+                y = 100
+            }
 
-        overlayView = ComposeView(this).apply {
-            setContent {
-                MaterialTheme {
-                    OverlayControlPanel(
-                        onClose = { stopSelf() }
-                    )
+            overlayView = ComposeView(this).apply {
+                setContent {
+                    MaterialTheme {
+                        OverlayControlPanel(
+                            onClose = { stopSelf() }
+                        )
+                    }
                 }
             }
-        }
 
-        try {
             windowManager.addView(overlayView, params)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -154,22 +176,26 @@ class DailyQuestService : Service() {
     }
 
     fun updateNotification(status: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, createNotification(status))
+        try {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID, createNotification(status))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        captureManager?.stop()
-        captureManager = null
-        overlayView?.let {
-            try {
+        try {
+            captureManager?.stop()
+            captureManager = null
+            overlayView?.let {
                 windowManager.removeView(it)
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
+            overlayView = null
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        overlayView = null
         instance = null
     }
 

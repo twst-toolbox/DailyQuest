@@ -42,40 +42,78 @@ class MainActivity : ComponentActivity() {
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            // 启动前台服务并传递 MediaProjection
-            val serviceIntent = Intent(this, DailyQuestService::class.java).apply {
-                action = DailyQuestService.ACTION_START
-                putExtra(DailyQuestService.EXTRA_RESULT_CODE, result.resultCode)
-                putExtra(DailyQuestService.EXTRA_RESULT_DATA, result.data)
+        try {
+            if (result.resultCode == RESULT_OK && result.data != null) {
+                // 启动前台服务并传递 MediaProjection
+                val serviceIntent = Intent(this, DailyQuestService::class.java).apply {
+                    action = DailyQuestService.ACTION_START
+                    putExtra(DailyQuestService.EXTRA_RESULT_CODE, result.resultCode)
+                    putExtra(DailyQuestService.EXTRA_RESULT_DATA, result.data)
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
             }
-            startForegroundService(serviceIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        captureManager = ScreenCaptureManager(this)
-        gestureController = GestureController(captureManager)
-        templateStore = TemplateStore(this)
-        templateMatcher = TemplateMatcher()
-        scriptExecutor = ScriptExecutor(this, gestureController, templateStore, templateMatcher)
+        try {
+            captureManager = ScreenCaptureManager(this)
+            gestureController = GestureController(captureManager)
+            templateStore = TemplateStore(this)
+            templateMatcher = TemplateMatcher()
+            scriptExecutor = ScriptExecutor(this, gestureController, templateStore, templateMatcher)
 
-        setContent {
-            DailyQuestTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    AppNavigator(
-                        gestureController = gestureController,
-                        scriptExecutor = scriptExecutor,
-                        templateStore = templateStore,
-                        onRequestAccessibility = { openAccessibilitySettings() },
-                        onRequestMediaProjection = { requestMediaProjection() },
-                        onRequestOverlay = { openOverlaySettings() }
-                    )
+            setContent {
+                DailyQuestTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        AppNavigator(
+                            gestureController = gestureController,
+                            scriptExecutor = scriptExecutor,
+                            templateStore = templateStore,
+                            onRequestAccessibility = { openAccessibilitySettings() },
+                            onRequestMediaProjection = { requestMediaProjection() },
+                            onRequestOverlay = { openOverlaySettings() }
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // 显示错误界面
+            setContent {
+                MaterialTheme {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                "启动失败",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                e.message ?: "未知错误",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -93,14 +131,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestMediaProjection() {
-        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+        try {
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        if (!DailyQuestService.isRunning()) {
-            captureManager.stop()
+        try {
+            if (!DailyQuestService.isRunning()) {
+                captureManager.stop()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }
@@ -141,11 +187,17 @@ fun AppNavigator(
             onRequestOverlay = onRequestOverlay,
             onStartRecording = { gameId ->
                 scope.launch {
-                    val bitmap = gestureController.captureScreen()
-                    if (bitmap != null) {
-                        currentScreenshot = bitmap
-                        currentGameId = gameId
-                        currentScreen = Screen.RECORDER
+                    try {
+                        // 优先使用前台服务的 captureManager
+                        val bitmap = DailyQuestService.captureManager?.captureScreen()
+                            ?: gestureController.captureScreen()
+                        if (bitmap != null) {
+                            currentScreenshot = bitmap
+                            currentGameId = gameId
+                            currentScreen = Screen.RECORDER
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     }
                 }
             }
@@ -188,6 +240,7 @@ fun MainScreen(
     var isRunning by remember { mutableStateOf(false) }
     var availableGames by remember { mutableStateOf(listOf<String>()) }
     var showRecorderDialog by remember { mutableStateOf(false) }
+    var gameIdInput by remember { mutableStateOf("twst-jp") }
 
     LaunchedEffect(Unit) {
         scriptExecutor.onLog = { msg ->
@@ -219,7 +272,7 @@ fun MainScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "M3 录制版",
+            text = "v0.3.0 M3 录制版",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -404,8 +457,8 @@ fun MainScreen(
                     Text("为哪个游戏录制模板？")
                     Spacer(modifier = Modifier.height(16.dp))
                     OutlinedTextField(
-                        value = "twst-jp",
-                        onValueChange = {},
+                        value = gameIdInput,
+                        onValueChange = { gameIdInput = it },
                         label = { Text("游戏 ID") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -421,7 +474,7 @@ fun MainScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showRecorderDialog = false
-                    onStartRecording("twst-jp")
+                    onStartRecording(gameIdInput)
                 }) {
                     Text("开始录制")
                 }
