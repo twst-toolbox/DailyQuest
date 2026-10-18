@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.dailyquest.app.core.capture.ScreenCaptureManager
 import com.dailyquest.app.core.input.GestureController
 import com.dailyquest.app.service.DailyQuestAccessibilityService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -110,7 +111,7 @@ fun MainScreen(
             isAccessibilityRunning = gestureController.isAccessibilityReady()
             isCaptureRunning = gestureController.isCaptureReady()
             canDrawOverlay = Settings.canDrawOverlays(context)
-            kotlinx.coroutines.delay(500)
+            delay(500)
         }
     }
 
