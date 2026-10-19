@@ -15,8 +15,8 @@ android {
         applicationId = "com.dailyquest.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.3.2"
+        versionCode = 5
+        versionName = "0.3.3"
     }
 
     buildTypes {
@@ -30,11 +30,9 @@ android {
         }
     }
 
-    // 自定义 APK 输出文件名
     applicationVariants.all {
         val variant = this
         variant.outputs.all {
-            val buildType = variant.buildType.name
             val versionName = variant.versionName
             val versionCode = variant.versionCode
             val date = SimpleDateFormat("yyyyMMdd-HHmm").format(Date())
@@ -74,15 +72,13 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
+    implementation("androidx.lifecycle:lifecycle-service:2.8.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.navigation:navigation-compose:2.7.7")
 
-    // JSON 解析
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-
-    // OpenCV
     implementation("org.opencv:opencv:4.9.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

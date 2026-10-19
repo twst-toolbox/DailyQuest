@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
-import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -14,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
+import com.dailyquest.app.util.CrashLogger
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
@@ -25,6 +25,7 @@ class ScreenCaptureManager(private val context: Context) {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private val handler = Handler(Looper.getMainLooper())
 
     private val screenWidth: Int
     private val screenHeight: Int
@@ -40,37 +41,39 @@ class ScreenCaptureManager(private val context: Context) {
         screenDensity = metrics.densityDpi
     }
 
-    /**
-     * 启动 MediaProjection（需要用户授权）
-     */
     fun start(resultCode: Int, data: Intent) {
-        val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = projectionManager.getMediaProjection(resultCode, data)
+        try {
+            val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            val projection = projectionManager.getMediaProjection(resultCode, data)
+            mediaProjection = projection
 
-        imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+            // Android 14 必须在 createVirtualDisplay 之前注册回调
+            projection.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    release()
+                }
+            }, handler)
 
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "ScreenCapture",
-            screenWidth,
-            screenHeight,
-            screenDensity,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            Handler(Looper.getMainLooper())
-        )
+            imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+
+            virtualDisplay = projection.createVirtualDisplay(
+                "ScreenCapture",
+                screenWidth, screenHeight, screenDensity,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader?.surface, null, handler
+            )
+        } catch (e: Throwable) {
+            CrashLogger.write(context, "ScreenCaptureManager.start", e)
+            release()
+        }
     }
 
-    /**
-     * 截取当前屏幕
-     */
     suspend fun captureScreen(): Bitmap? = suspendCancellableCoroutine { cont ->
         val image = imageReader?.acquireLatestImage()
         if (image == null) {
             cont.resume(null)
             return@suspendCancellableCoroutine
         }
-
         try {
             val planes = image.planes
             val buffer = planes[0].buffer
@@ -79,38 +82,30 @@ class ScreenCaptureManager(private val context: Context) {
             val rowPadding = rowStride - pixelStride * screenWidth
 
             val bitmap = Bitmap.createBitmap(
-                screenWidth + rowPadding / pixelStride,
-                screenHeight,
-                Bitmap.Config.ARGB_8888
+                screenWidth + rowPadding / pixelStride, screenHeight, Bitmap.Config.ARGB_8888
             )
             bitmap.copyPixelsFromBuffer(buffer)
-
-            // 裁剪掉 padding
-            val croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+            val cropped = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
             bitmap.recycle()
-
-            cont.resume(croppedBitmap)
-        } catch (e: Exception) {
-            e.printStackTrace()
+            cont.resume(cropped)
+        } catch (e: Throwable) {
+            CrashLogger.write(context, "captureScreen", e)
             cont.resume(null)
         } finally {
             image.close()
         }
     }
 
-    /**
-     * 停止截屏
-     */
-    fun stop() {
-        virtualDisplay?.release()
+    fun stop() = release()
+
+    private fun release() {
+        try { virtualDisplay?.release() } catch (_: Throwable) {}
+        try { imageReader?.close() } catch (_: Throwable) {}
+        try { mediaProjection?.stop() } catch (_: Throwable) {}
         virtualDisplay = null
-
-        imageReader?.close()
         imageReader = null
-
-        mediaProjection?.stop()
         mediaProjection = null
     }
 
-    fun isRunning(): Boolean = mediaProjection != null
+    fun isRunning(): Boolean = mediaProjection != null && virtualDisplay != null
 }
