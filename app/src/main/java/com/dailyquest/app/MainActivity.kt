@@ -184,7 +184,6 @@ fun MainScreen(
     var statusText by remember { mutableStateOf("等待操作") }
     var logText by remember { mutableStateOf("") }
     var isAccessibilityRunning by remember { mutableStateOf(false) }
-    var isCaptureRunning by remember { mutableStateOf(false) }
     var canDrawOverlay by remember { mutableStateOf(false) }
     var isRunning by remember { mutableStateOf(false) }
     var availableGames by remember { mutableStateOf(listOf<String>()) }
@@ -192,9 +191,12 @@ fun MainScreen(
     var gameIdInput by remember { mutableStateOf("twst-jp") }
     var crashLog by remember { mutableStateOf("") }
     var showCrashDialog by remember { mutableStateOf(false) }
+    var captureError by remember { mutableStateOf<String?>(null) }
+
+    // 订阅录屏状态流（StateFlow，授权后自动刷新）
+    val isCaptureRunning by DailyQuestService.captureRunning.collectAsState()
 
     LaunchedEffect(Unit) {
-        // 启动时检查崩溃日志
         crashLog = CrashLogger.read(context)
         if (crashLog.isNotEmpty()) showCrashDialog = true
 
@@ -203,10 +205,10 @@ fun MainScreen(
         }
         while (true) {
             isAccessibilityRunning = gestureController.isAccessibilityReady()
-            isCaptureRunning = DailyQuestService.captureManager?.isRunning() ?: false
             canDrawOverlay = Settings.canDrawOverlays(context)
             isRunning = scriptExecutor.state == ScriptExecutor.State.RUNNING
             availableGames = templateStore.listGames()
+            captureError = ScreenCaptureManager.lastError
             delay(500)
         }
     }
@@ -220,7 +222,7 @@ fun MainScreen(
     ) {
         Text("DailyQuest", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("v0.3.3 M3 修复版", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("v0.3.5 M3 修复版", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(modifier = Modifier.height(24.dp))
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -231,6 +233,10 @@ fun MainScreen(
                 StatusRow("屏幕录制", isCaptureRunning)
                 StatusRow("悬浮窗", canDrawOverlay)
                 StatusRow("脚本引擎", isRunning, activeText = "运行中", inactiveText = "待机")
+                if (captureError != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("录制错误: $captureError", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
             }
         }
 
@@ -332,7 +338,6 @@ fun MainScreen(
         Text(text = statusText, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
-    // 录制对话框
     if (showRecorderDialog) {
         AlertDialog(
             onDismissRequest = { showRecorderDialog = false },
@@ -353,7 +358,6 @@ fun MainScreen(
         )
     }
 
-    // 崩溃日志对话框
     if (showCrashDialog) {
         AlertDialog(
             onDismissRequest = { showCrashDialog = false },

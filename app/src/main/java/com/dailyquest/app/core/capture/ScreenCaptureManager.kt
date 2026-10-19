@@ -12,6 +12,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.Looper
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.WindowManager
 import com.dailyquest.app.util.CrashLogger
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -21,6 +22,12 @@ import kotlin.coroutines.resume
  * MediaProjection 截屏管理器
  */
 class ScreenCaptureManager(private val context: Context) {
+
+    companion object {
+        private const val TAG = "ScreenCaptureManager"
+        var lastError: String? = null
+            private set
+    }
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -42,27 +49,48 @@ class ScreenCaptureManager(private val context: Context) {
     }
 
     fun start(resultCode: Int, data: Intent) {
+        lastError = null
         try {
+            Log.i(TAG, "start: 获取 MediaProjection...")
             val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val projection = projectionManager.getMediaProjection(resultCode, data)
+            if (projection == null) {
+                lastError = "getMediaProjection 返回 null"
+                Log.e(TAG, lastError!!)
+                return
+            }
             mediaProjection = projection
+            Log.i(TAG, "start: MediaProjection 获取成功")
 
             // Android 14 必须在 createVirtualDisplay 之前注册回调
             projection.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
+                    Log.w(TAG, "MediaProjection onStop")
                     release()
                 }
             }, handler)
 
+            Log.i(TAG, "start: 创建 ImageReader ${screenWidth}x${screenHeight}")
             imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
 
+            Log.i(TAG, "start: 创建 VirtualDisplay...")
             virtualDisplay = projection.createVirtualDisplay(
                 "ScreenCapture",
                 screenWidth, screenHeight, screenDensity,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface, null, handler
             )
+
+            if (virtualDisplay == null) {
+                lastError = "createVirtualDisplay 返回 null"
+                Log.e(TAG, lastError!!)
+                release()
+            } else {
+                Log.i(TAG, "start: 全部成功，VirtualDisplay=${virtualDisplay?.display?.displayId}")
+            }
         } catch (e: Throwable) {
+            lastError = "${e.javaClass.simpleName}: ${e.message}"
+            Log.e(TAG, "start 失败", e)
             CrashLogger.write(context, "ScreenCaptureManager.start", e)
             release()
         }
@@ -107,5 +135,5 @@ class ScreenCaptureManager(private val context: Context) {
         mediaProjection = null
     }
 
-    fun isRunning(): Boolean = mediaProjection != null && virtualDisplay != null
+    fun isRunning(): Boolean = mediaProjection != null && virtualDisplay != null && imageReader != null
 }

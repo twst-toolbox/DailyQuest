@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
@@ -34,6 +35,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.dailyquest.app.MainActivity
 import com.dailyquest.app.core.capture.ScreenCaptureManager
 import com.dailyquest.app.util.CrashLogger
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class DailyQuestService : Service() {
 
@@ -52,11 +54,15 @@ class DailyQuestService : Service() {
         var captureManager: ScreenCaptureManager? = null
             private set
 
+        /** 录屏状态流，UI 层 collectAsState 订阅 */
+        val captureRunning = MutableStateFlow(false)
+
         fun isRunning(): Boolean = instance != null
     }
 
     private lateinit var windowManager: WindowManager
     private var overlayView: ComposeView? = null
+    private var overlayLifecycleOwner: OverlayLifecycleOwner? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -69,20 +75,29 @@ class DailyQuestService : Service() {
         try {
             when (intent?.action) {
                 ACTION_START -> {
-                    // 1. 先启动前台服务（带类型声明，Android 10+ 必需）
+                    // 1. 先启动前台服务（带 mediaProjection 类型）
                     startForegroundWithType()
 
                     // 2. 再启动 MediaProjection
-                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+                    // 注意：RESULT_OK == -1，不能用 -1 作为"无效"的默认值
+                    val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Int.MIN_VALUE)
                     val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
                     } else {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra(EXTRA_RESULT_DATA)
                     }
-                    if (resultCode != -1 && resultData != null) {
+
+                    if (resultCode == android.app.Activity.RESULT_OK && resultData != null) {
+                        captureManager?.stop()
                         captureManager = ScreenCaptureManager(this)
                         captureManager?.start(resultCode, resultData)
+                        captureRunning.value = captureManager?.isRunning() == true
+                    } else {
+                        CrashLogger.write(
+                            this, "onStartCommand",
+                            IllegalStateException("录屏参数无效: resultCode=$resultCode, data=${resultData != null}")
+                        )
                     }
 
                     // 3. 最后显示悬浮窗
@@ -129,8 +144,8 @@ class DailyQuestService : Service() {
                 y = 100
             }
 
-            // 关键修复：Service 里用 ComposeView 必须提供 LifecycleOwner 等三个 Owner
             val owner = OverlayLifecycleOwner()
+            overlayLifecycleOwner = owner
 
             overlayView = ComposeView(this).apply {
                 setViewTreeLifecycleOwner(owner)
@@ -159,7 +174,6 @@ class DailyQuestService : Service() {
                 }
             }
 
-            // Owner 必须先 handleLifecycleEvent 再 addView
             owner.onServiceCreate()
             windowManager.addView(overlayView, params)
             owner.onServiceResume()
@@ -196,22 +210,20 @@ class DailyQuestService : Service() {
         super.onDestroy()
         try { captureManager?.stop() } catch (_: Throwable) {}
         captureManager = null
+        captureRunning.value = false
         overlayView?.let {
             try { windowManager.removeView(it) } catch (_: Throwable) {}
         }
         overlayView = null
+        overlayLifecycleOwner?.onServiceDestroy()
+        overlayLifecycleOwner = null
         instance = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
-/**
- * 为悬浮窗 ComposeView 提供 LifecycleOwner / SavedStateRegistryOwner / ViewModelStoreOwner
- * （Service 没有这三个，Compose 挂到窗口时会因找不到而崩溃）
- */
 class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
-
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
     private val store = ViewModelStore()
